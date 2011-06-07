@@ -22,16 +22,13 @@ def dataGrabber():
   This program automatically saves the data to a file using the standard format: YYYYMMDD-HHMM_lc574al_<sample name>_<experimenter name>.dat
   """
 
-  # Some parameters that define the GPIB network topology.
+  # Some parameters that define the GPIB network topology and how the filename is constructed.
   scopeGPIBAddr = 5
   sampleName = "jrs0076"
   experimenterInitials = "jrs"
 
-  # Initialize the Prologix controller. For some reason I don't understand the timeout must be set to 0 for things to work.
+  # Initialize the Prologix controller.
   prologix = serial.Serial("/dev/ttyUSB0", timeout=0)
-
-  # Initialize the dictionary that will be written to disk.
-  dat = {"data":[]}
 
   # Configure the prologix box to be a CONTROLLER, set it to talk to the scope, make sure the scope automatically responds after it has been addressed, and make the prologix box the controller-in-charge
   prologix.write("++mode 1\n")
@@ -39,33 +36,48 @@ def dataGrabber():
   prologix.write("++auto 1\n")
   prologix.write("++ifc\n")
 
-  # Grab identifying information about the scope.
+  # Begin by pulling all of the pertinant data from the oscilloscope and putting it into an intermediate data structure.
+  intermediateDict = {}
+  
+  # Grab identifying information about the scope and put it into the intermediate dict.
   idn = ask("*IDN?", prologix)
+  intermediateDict["idn"] = idn
 
-  # Populate the metadata field of the dictionary that will be written to disk.
-  dat["metadata"] = {"idn":idn}
-
+  # Get the WAVEDESC data for all of the channels and add it to the intermediate dict.
+  intermediateDict["wavedesc"] = []
   for indx in range(1,5):
-    wavedesc = ask("C" + str(indx) + ':INSPECT? "WAVEDESC"', prologix)
-    dat["metadata"]["C" + str(indx)] = wavedesc
+    wavedescStr = ask("C" + str(indx) + ':INSPECT? "WAVEDESC"', prologix)
+    intermediateDict["wavedesc"].append(wavedescStr)
 
-  # Get data from the channels on the scope and put it into an intermediate list.
-  channelTxt = []
+  # Get data from the channels on the scope and put it into the intermediate dict.
+  intermediateDict["simple"] = []
   for indx in range(1,5):
     print "Channel " + str(indx) + " start."
-    simple = ask("C" + str(indx) + ':INSPECT? "SIMPLE"', prologix)
+    simpleStr = ask("C" + str(indx) + ':INSPECT? "SIMPLE"', prologix)
     print "..complete.\n"
-    channelTxt.append(simple)
+    intermediateDict["simple"].append(simpleStr)
 
-  # Get the trigger times.
-  trigtime = ask('C1::INSPECT? "TRIGTIME"', prologix)
+  # Get the trigger times and put it into the intermediate dict.
+  intermediateDict["trigtime"] = ask('C1::INSPECT? "TRIGTIME"', prologix)
   
-  # Do some magic to make a single list of trigger offsets.
-  trigOffset = []
-      
+  
+  # Now that all of the data has been copied from the oscilloscope, begin constructing the object that will be written to the disk.
+  datObject = {"metadata": {},\
+               "data": []}
+  
+  # First, the metadata.
+  datObject["metadata"]["idn"] = intermediateDict["idn"]
+  for indx, txt in enumerate(intermediateDict["wavedesc"]):
+    datObject["metadata"]["C" + str(indx + 1)] = txt
+    
+  # To get the data part of the object, I will start by parsing the SIMPLE data that came from the oscilloscope.
+  datObject["data"] = genTraceArrays(intermediateDict)
+  
+  # Finally I'll construct the temporal arrays and add them to the object that will be written to disk.
+  temArrays = genTimeArrays(intermediateDict)
+  for indx, array in timArrays:
+    datObject["data"][indx]["time"] = array
 
-
-  # Rearrange the data into an object.
 
   # Write the data to a file.
   now = datetime.datetime.now()
@@ -106,7 +118,80 @@ def ask(reqStr, serDev):
   return txt
 
 
-def setdate(serDev):
+def genTimeArrays(intermediateDict):
+  """
+  Return list of arrays of temporal data for the trigger events.
+  
+  This method queries the oscilloscope and generates the temporal data for each trigger event. The indices of the returned list correspond to the index of the trigger event.
+  """
+  
+  # Create a list out of the lines in the trigtime string.
+  trigtimeList = intermediateDict["trigtime"].split("\r\n")
+  
+  # Set up some pyparsing objects to parse the values coming out of the trigtime list.
+  digits = pyparsing.Word(pyparsing.nums)
+  plusminus = pyparsing.oneOf("+ -")
+  scinot = pyparsing.Combine(pyparsing.Optional(plusminus) + digits + pyparsing.Literal(".") + digits + pyparsing.oneOf("e E") + plusminus + digits)
+  datLine = scinot + scinot
+  
+  # Initialize the list that will contain the inital values for the arrays containing the temporal data, then populate it by parsing the strings in the trigtime list.
+  initialTimeValues = []
+  
+  for line in trigtimeList:
+    try:
+      offsetList = datLine.parseString(line)
+      # I'm explicitly doing this sum because I know there are only two elements in the offsetList.
+      initialTimeValues.append(float(offsetList[0]) + float(offsetList[1]))
+    else:
+      # It wasn't data. Ignore.
+      pass
+    
+  # Find the timestep given by the line with "HORIZ_INTERVAL" in one of the channels' wavedesc.
+  horizIntvlParser = pyparsing.Suppress("HORIZ_INTERVAL") + pyparsing.Suppress(":") + scinot
+  horizIntvl = float(horizIntvlParser.searchString(intermediateDict["wavedesc"][0])[0][0])
+  
+  # Find the total number of points recorded for each trigger event by looking at WAVE_ARRAY_COUNT in on of the channels' wavedesc.
+  waveArrayCountParser = pyparsing.Suppress("WAVE_ARRAY_COUNT") + pyparsing.Suppress(":") + scinot
+  waveArrayCount = int(waveArrayCountParser.searchString(intermediateDict["wavedesc"][0])[0][0])
+  ptsPerTrig = waveArrayCount / len(initialTimeValues)
+  
+  # Generate a list of numpy arrays containing the temporal data for each trigger.
+  timeArrayList = []
+  protoTimeArray = np.arange(0, (ptsPerTrig * horizIntvl), horizIntvl)
+  for trigTime in trigTimeList:
+    timeArrayList.append(protoTimeArray + trigTime)
+    
+  return timeArrayList
+
+
+def genTraceArrays(intermediateDict):
+  """
+  Return list containing all the trace data according to trigger event.
+  """
+  
+  # Set up some pyparsing objects to parse the simple strings.
+  digits = pyparsing.Word(pyparsing.nums)
+  plusminus = pyparsing.oneOf("+ -")
+  scinot = pyparsing.Combine(pyparsing.Optional(plusminus) + digits + pyparsing.Literal(".") + digits + pyparsing.oneOf("e E") + plusminus + digits)
+  scinot.setParseAction(lambda tokens: float(tokens[0]))
+  
+  block = pyparsing.Group(pyparsing.OneOrMore(scinot))
+  segment = pyparsing.Suppress(pyparsing.Literal("Segment No") + digits)
+  channel = pyparsing.Literal("C") + digits
+  preamble = pyparsing.Suppress(channel + pyparsing.Literal(":INSP"))
+  quote = pyparsing.Suppress(pyparsing.Literal("\""))
+  simple = preamble + quote + pyparsing.OneOrMore(segment + block) + quote
+  
+  
+  
+  
+  
+  
+  
+  
+
+
+def setOscilloscopeDate(serDev):
   """
   Sets the date on the oscilloscope according to the local machine time.
   """
