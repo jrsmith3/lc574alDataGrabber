@@ -13,13 +13,13 @@ def dataGrabber():
   """
   Write data from the LeCroy LC574AL oscilloscope over GPIB-USB to a file.
 
-  This program uses the Prologix GPIB-USB controller (prologix.biz) to communicate with the LeCroy LC574AL oscilloscope, collect the trace data from all of the input channels, and write it to a file that can be used from a python script. This program was written because of the unacceptably slow speed of data transfer via RS232. The scope of this program is very narrow: it is a drop-in replacement for manually collecting trace data from the scope over RS232 during the typical workflow of creating marks on a sample with the pulse generator. This program would typically be run at the end of a spectroscopy scan, after the STM image data has been saved and after the STOP button has been pressed on the scope.
+  This program uses the Prologix GPIB-USB controller (prologix.biz) to communicate with the LeCroy LC574AL oscilloscope, collect the trace data from all of the input channels, and write it to a file. This program was written because of the unacceptably slow speed of data transfer via RS232. The scope of this program is very narrow: it is a drop-in replacement for manually collecting trace data from the scope over RS232 during the typical workflow of creating marks on a sample with the pulse generator. This program does no initialization of equipment and thus assumes trace data has been collected by the oscilloscope and is ready for transfer. This program would typically be run at the end of a spectroscopy scan, after the STM image data has been saved and after the STOP button has been pressed on the oscilloscope.
 
-  Data is collected from all input channels, regardless of what (if anything) is plugged into them. The data is restructured and saved as a python pickle so that it is trivial to access it from a python program later on. Data from the oscilloscope is structured in a nested series of dictionaries and lists as follows: The root object is a python dictionary with two fields, "metadata" and "data". The "metadata" field contains a string that identifies the oscillosocpe. The "data" field contains a python list with entries corresponding to each segment the oscilloscope has recorded. Each entry in the "data" list is a dictionary with four fields: "C1", ..., "C4", and "time". All items in the dictionary are numpy arrays; the "time" array is the ordinate and the "C1", etc arrays are the abscissae. Times are recorded relative to the initial trigger event.
+  Data is collected from all input channels, regardless of what (if anything) is plugged into them. The data is saved as a python pickle so that it is trivial to access it from a python program later on. No parsing is done on the data collected from the oscilloscope: the data is trnasferred from the oscilloscope as text strings, and this program does minimal structuring of the returned strings into a series of nested python dictionaries. At the root level of the dictionary are five fields, one with key "idn" that stores a string containing the *IDN? response of the oscilloscope, adn four with keys "C1" ... "C4" containing dictionaries of trace data for channels 1 through 4. The trace dictionaries contain three fields: "wavedesc", "trigtime", and "simple". Each contains a string taken from the oscilloscope that has been returned from the corresponding query. For example, the wavedesc key for the channel C1 contains the string read from the oscilloscope after writing the 'C1:INSP? "WAVEDESC"' query to the oscilloscope.
 
-  For example, I sometimes do a spectroscopy scan using a regular 4x4 array of spectroscopy points. Therefore there are 16 total spectroscopy locations, the coordinates of which are recorded in the SM4 file that XPMPro records. Each of these 16 pulses are recorded by the oscilloscope, and this program will put the data for each of them into the 16 elements of the "data" list. If I had done a regular 8x8 array spectroscopy scan, this program would create a "data" list 64 elements long, and so on. Assuming there is zero temporal offset on the scope, the first element of the "time" array in the first item of the "data" list would be 0.0000... Assuming there was a 0.25s gap betweeen the first pulse and the second, the first element of the "time" array in the second item of the "data" list would be 0.25000000..., and so on.
-
-  This program automatically saves the data to a file using the standard format: YYYYMMDD-HHMM_lc574al_<sample name>_<experimenter name>.dat
+  This program automatically saves the data to a file in the present directory using the standard format: YYYYMMDD-HHMM_lc574al_intermediate_<sample name>_<experimenter initials>.dat
+  
+  This program is called from the command line and takes no arguments.
   """
 
   # Some parameters that define the GPIB network topology and how the filename is constructed.
@@ -42,46 +42,34 @@ def dataGrabber():
   # Grab identifying information about the scope and put it into the intermediate dict.
   idn = ask("*IDN?", prologix)
   intermediateDict["idn"] = idn
-
-  # Get the WAVEDESC data for all of the channels and add it to the intermediate dict.
-  intermediateDict["wavedesc"] = []
+  
+  # Get the WAVEDESC, TRIGTIME, and SIMPLE data from the oscilloscope and put it in the proper place in the dictionary.
   for indx in range(1,5):
-    wavedescStr = ask("C" + str(indx) + ':INSPECT? "WAVEDESC"', prologix)
-    intermediateDict["wavedesc"].append(wavedescStr)
+    indx = str(indx)
+    print("Getting WAVEDESC for C" + indx)
+    wavedescStr = ask("C" + indx + ':INSPECT? "WAVEDESC"', prologix)
+    print("...done")
 
-  # Get data from the channels on the scope and put it into the intermediate dict.
-  intermediateDict["simple"] = []
-  for indx in range(1,5):
-    print "Channel " + str(indx) + " start."
-    simpleStr = ask("C" + str(indx) + ':INSPECT? "SIMPLE"', prologix)
-    print "..complete.\n"
-    intermediateDict["simple"].append(simpleStr)
+    print("Getting TRIGTIME for C" + indx)
+    trigtimeStr = ask("C" + indx + ':INSPECT? "TRIGTIME"', prologix)
+    print("...done")
 
-  # Get the trigger times and put it into the intermediate dict.
-  intermediateDict["trigtime"] = ask('C1::INSPECT? "TRIGTIME"', prologix)
-  
-  
-  # Now that all of the data has been copied from the oscilloscope, begin constructing the object that will be written to the disk.
-  datObject = {"metadata": {},\
-               "data": []}
-  
-  # First, the metadata.
-  datObject["metadata"]["idn"] = intermediateDict["idn"]
-  for indx, txt in enumerate(intermediateDict["wavedesc"]):
-    datObject["metadata"]["C" + str(indx + 1)] = txt
+    print("Getting SIMPLE for C" + indx)
+    simpleStr = ask("C" + indx + ':INSPECT? "SIMPLE"', prologix)
+    print("...done")
     
-  # To get the data part of the object, I will start by parsing the SIMPLE data that came from the oscilloscope.
-  datObject["data"] = genTraceArrays(intermediateDict)
-  
-  # Finally I'll construct the temporal arrays and add them to the object that will be written to disk.
-  temArrays = genTimeArrays(intermediateDict)
-  for indx, array in timArrays:
-    datObject["data"][indx]["time"] = array
-
+    intermediateDict["C" + indx] = {"wavedesc": wavedescStr, \
+                                    "trigtime": trigtimeStr, \
+                                    "simple": simpleStr}
 
   # Write the data to a file.
   now = datetime.datetime.now()
-  filename = "_".join([now.strftime("%Y%m%d-%H%M"), "ls574al", sampleName, experimenterName]) + ".dat"
+  filename = "_".join([now.strftime("%Y%m%d-%H%M"), "ls574al", "intermediate", \
+    sampleName, experimenterName]) + ".dat"
+    
+  f = open(filename, "w")
+  pickle.dump(intermediateDict, f)
+  f.close()
 
 
 def ask(reqStr, serDev):
