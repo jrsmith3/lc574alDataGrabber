@@ -65,7 +65,7 @@ def dataGrabber():
   # Write the data to a file.
   now = datetime.datetime.now()
   filename = "_".join([now.strftime("%Y%m%d-%H%M"), "ls574al", "intermediate", \
-    sampleName, experimenterName]) + ".dat"
+    sampleName, experimenterInitials]) + ".dat"
     
   f = open(filename, "w")
   pickle.dump(intermediateDict, f)
@@ -130,7 +130,7 @@ def genTimeArrays(intermediateDict):
       offsetList = datLine.parseString(line)
       # I'm explicitly doing this sum because I know there are only two elements in the offsetList.
       initialTimeValues.append(float(offsetList[0]) + float(offsetList[1]))
-    else:
+    except:
       # It wasn't data. Ignore.
       pass
     
