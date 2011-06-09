@@ -46,6 +46,11 @@ def dataGrabber():
   # Get the WAVEDESC, TRIGTIME, and SIMPLE data from the oscilloscope and put it in the proper place in the dictionary.
   for indx in range(1,5):
     indx = str(indx)
+    
+    f = open("place.txt","w")
+    f.write("channel:"+indx)
+    f.close()
+    
     print("Getting WAVEDESC for C" + indx)
     wavedescStr = ask("C" + indx + ':INSPECT? "WAVEDESC"', prologix)
     print("...done")
@@ -64,7 +69,7 @@ def dataGrabber():
 
   # Write the data to a file.
   now = datetime.datetime.now()
-  filename = "_".join([now.strftime("%Y%m%d-%H%M"), "ls574al", "intermediate", \
+  filename = "_".join([now.strftime("%Y%m%d-%H%M"), "lc574al", "intermediate", \
     sampleName, experimenterInitials]) + ".dat"
     
   f = open(filename, "w")
@@ -100,6 +105,7 @@ def ask(reqStr, serDev):
       else:
 	# We aren't at the end of the data stream, but we're at the end of the line so reset it.
 	txt += line
+	print(line)
 	line = ""
   
   serDev.flushInput()
