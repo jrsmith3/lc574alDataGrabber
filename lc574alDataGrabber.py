@@ -7,7 +7,7 @@ import pickle
 import datetime
 import re
 import pyparsing
-import pdb
+import time
 
 def dataGrabber():
   """
@@ -40,16 +40,16 @@ def dataGrabber():
   intermediateDict = {}
   
   # Grab identifying information about the scope and put it into the intermediate dict.
-  idn = ask("*IDN?", prologix)
-  intermediateDict["idn"] = idn
+  #idn = ask("*IDN?", prologix)
+  #intermediateDict["idn"] = idn
   
   # Get the WAVEDESC, TRIGTIME, and SIMPLE data from the oscilloscope and put it in the proper place in the dictionary.
   for indx in range(1,5):
     indx = str(indx)
     
-    f = open("place.txt","w")
-    f.write("channel:"+indx)
-    f.close()
+    #f = open("place.txt","w")
+    #f.write("channel:"+indx)
+    #f.close()
     
     print("Getting WAVEDESC for C" + indx)
     wavedescStr = ask("C" + indx + ':INSPECT? "WAVEDESC"', prologix)
@@ -93,6 +93,7 @@ def ask(reqStr, serDev):
   # Initialize the variables we need to read everything out of the device buffer.
   line = ""
   txt = ""
+  tic = time.time()
   
   while True:
     bufr = serDev.read()
@@ -107,6 +108,15 @@ def ask(reqStr, serDev):
 	txt += line
 	print(line)
 	line = ""
+	
+    # Timeout if nothing is coming in over the wire for longer than 0.5s.
+    if bufr == "":
+      if time.time() - tic > 0.5:
+	# Nothing has been seen from the USB-GPIB controller, so get out of here.
+	break
+    else:
+      # Reset the timer because data is still coming in.
+      tic = time.time()
   
   serDev.flushInput()
   return txt
