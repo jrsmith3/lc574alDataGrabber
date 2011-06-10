@@ -9,7 +9,7 @@ import re
 import pyparsing
 import time
 
-def dataGrabber():
+def dataGrabber(sampleName, experimenterInitials, savePath):
   """
   Write data from the LeCroy LC574AL oscilloscope over GPIB-USB to a file.
 
@@ -24,8 +24,8 @@ def dataGrabber():
 
   # Some parameters that define the GPIB network topology and how the filename is constructed.
   scopeGPIBAddr = 5
-  sampleName = "jrs0076"
-  experimenterInitials = "jrs"
+  #sampleName = "jrs0076"
+  #experimenterInitials = "jrs"
 
   # Initialize the Prologix controller.
   prologix = serial.Serial("/dev/ttyUSB0", timeout=0)
@@ -72,9 +72,12 @@ def dataGrabber():
   filename = "_".join([now.strftime("%Y%m%d-%H%M"), "lc574al", "intermediate", \
     sampleName, experimenterInitials]) + ".dat"
     
-  f = open(filename, "w")
+  f = open(savePath + filename, "w")
   pickle.dump(intermediateDict, f)
   f.close()
+  
+  print("File saved at: " + savePath + filename)
+  ask("BUZZ BEEP", prologix)
 
 
 def ask(reqStr, serDev):
